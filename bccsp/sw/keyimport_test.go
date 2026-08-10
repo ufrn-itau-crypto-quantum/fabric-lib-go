@@ -17,6 +17,9 @@ limitations under the License.
 package sw
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -24,6 +27,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/hyperledger/fabric-lib-go/bccsp"
 	mocks2 "github.com/hyperledger/fabric-lib-go/bccsp/mocks"
 	"github.com/hyperledger/fabric-lib-go/bccsp/sw/mocks"
 	"github.com/stretchr/testify/require"
@@ -235,7 +239,7 @@ func TestX509PublicKeyImportOptsKeyImporter(t *testing.T) {
 	cert.PublicKey = "Hello world"
 	_, err = ki.KeyImport(cert, &mocks2.KeyImportOpts{})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "Certificate's public key type not recognized. Supported keys: [ECDSA, ED25519, RSA]")
+	require.Contains(t, err.Error(), "Certificate's public key type not recognized. Supported keys: [ECDSA, ED25519, ML-DSA, RSA]")
 }
 
 func TestX509RSAKeyImport(t *testing.T) {
@@ -248,4 +252,90 @@ func TestX509RSAKeyImport(t *testing.T) {
 	require.NoError(t, err, "key import failed")
 	require.NotNil(t, key, "key must not be nil")
 	require.Equal(t, &rsaPublicKey{pubKey: &pk.PublicKey}, key)
+}
+
+func TestMLDSAPrivateKeyImportOptsKeyImporter(t *testing.T) {
+	t.Parallel()
+
+	ki := &mldsaPrivateKeyImportOptsKeyImporter{}
+
+	_, err := ki.KeyImport("Hello World", &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw material. Expected byte array.")
+
+	_, err = ki.KeyImport(nil, &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw material. Expected byte array.")
+
+	_, err = ki.KeyImport([]byte(nil), &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw. It must not be nil.")
+
+	_, err = ki.KeyImport([]byte{0}, &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Failed converting PKCS8 to ML-DSA private key")
+
+	// A well-formed DER of a different algorithm must be rejected on the cast.
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	ecdsaDER, err := x509.MarshalPKCS8PrivateKey(ecdsaKey)
+	require.NoError(t, err)
+	_, err = ki.KeyImport(ecdsaDER, &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Failed casting to ML-DSA private key")
+
+	// The happy path.
+	mldsaKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(mldsaKey)
+	require.NoError(t, err)
+	k, err := ki.KeyImport(der, &bccsp.MLDSAPrivateKeyImportOpts{})
+	require.NoError(t, err)
+	require.True(t, k.Private())
+}
+
+func TestMLDSAPKIXPublicKeyImportOptsKeyImporter(t *testing.T) {
+	t.Parallel()
+
+	ki := &mldsaPKIXPublicKeyImportOptsKeyImporter{}
+
+	_, err := ki.KeyImport("Hello World", &bccsp.MLDSAPKIXPublicKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw material. Expected byte array.")
+
+	_, err = ki.KeyImport([]byte(nil), &bccsp.MLDSAPKIXPublicKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw. It must not be nil.")
+
+	_, err = ki.KeyImport([]byte{0}, &bccsp.MLDSAPKIXPublicKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Failed converting PKIX to ML-DSA public key")
+
+	mldsaKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(mldsaKey.PublicKey())
+	require.NoError(t, err)
+	k, err := ki.KeyImport(der, &bccsp.MLDSAPKIXPublicKeyImportOpts{})
+	require.NoError(t, err)
+	require.False(t, k.Private())
+}
+
+func TestMLDSAGoPublicKeyImportOptsKeyImporter(t *testing.T) {
+	t.Parallel()
+
+	ki := &mldsaGoPublicKeyImportOptsKeyImporter{}
+
+	_, err := ki.KeyImport("Hello World", &bccsp.MLDSAGoPublicKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw material. Expected *mldsa.PublicKey.")
+
+	_, err = ki.KeyImport(nil, &bccsp.MLDSAGoPublicKeyImportOpts{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid raw material. Expected *mldsa.PublicKey.")
+
+	mldsaKey, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	require.NoError(t, err)
+	k, err := ki.KeyImport(mldsaKey.PublicKey(), &bccsp.MLDSAGoPublicKeyImportOpts{})
+	require.NoError(t, err)
+	require.False(t, k.Private())
 }
