@@ -22,8 +22,8 @@ import (
 // An *mldsa.Options is passed through untouched, so callers that need a context string can
 // supply one.
 func mldsaOptions(opts bccsp.SignerOpts) *mldsa.Options {
-	if o, ok := opts.(*mldsa.Options); ok {
-		return o
+	if mlopts, ok := opts.(*mldsa.Options); ok {
+		return mlopts
 	}
 	return &mldsa.Options{}
 }

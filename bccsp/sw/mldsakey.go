@@ -24,6 +24,7 @@ type mldsaPrivateKey struct {
 
 // Bytes converts this key to its byte representation,
 // if this operation is allowed.
+// In the mldsa case, it isn't allowed because the Bytes function returns the seed, and not it bytes
 func (k *mldsaPrivateKey) Bytes() ([]byte, error) {
 	return nil, errors.New("Not supported.")
 }

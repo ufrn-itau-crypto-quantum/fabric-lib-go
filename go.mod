@@ -2,6 +2,8 @@ module github.com/hyperledger/fabric-lib-go
 
 go 1.27
 
+toolchain go1.27rc2
+
 require (
 	github.com/go-kit/kit v0.13.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
