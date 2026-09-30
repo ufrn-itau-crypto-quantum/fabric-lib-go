@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"fmt"
 	"os"
@@ -167,4 +168,39 @@ func TestStoreAndGetEd25519Keys(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ks.GetKey(ed25519FabricPub.SKI())
 	require.NoError(t, err)
+}
+
+func TestStoreAndGetMLDSAKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params mldsa.Parameters
+	}{
+		{"ML-DSA-44", mldsa.MLDSA44()},
+		{"ML-DSA-65", mldsa.MLDSA65()},
+		{"ML-DSA-87", mldsa.MLDSA87()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ks, err := NewFileBasedKeyStore(nil, t.TempDir(), false)
+			require.NoError(t, err)
+
+			priv, err := mldsa.GenerateKey(tc.params)
+			require.NoError(t, err)
+
+			mldsaFabricPriv := &mldsaPrivateKey{privKey: priv}
+			mldsaFabricPub := &mldsaPublicKey{pubKey: priv.PublicKey()}
+
+			err = ks.StoreKey(mldsaFabricPriv)
+			require.NoError(t, err)
+			loadedPriv, err := ks.GetKey(mldsaFabricPriv.SKI())
+			require.NoError(t, err)
+			require.True(t, loadedPriv.Private())
+			require.Equal(t, mldsaFabricPriv.SKI(), loadedPriv.SKI())
+
+			err = ks.StoreKey(mldsaFabricPub)
+			require.NoError(t, err)
+			loadedPub, err := ks.GetKey(mldsaFabricPub.SKI())
+			require.NoError(t, err)
+			require.Equal(t, mldsaFabricPub.SKI(), loadedPub.SKI())
+		})
+	}
 }

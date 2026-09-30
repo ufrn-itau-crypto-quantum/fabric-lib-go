@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 package sw
 
 import (
-	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"errors"
@@ -15,24 +15,31 @@ import (
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 )
 
-type ed25519PrivateKey struct {
-	privKey *ed25519.PrivateKey
+// A single pair of types covers all three parameter sets: crypto/mldsa carries the security
+// category in the key itself, reachable through PublicKey.Parameters().
+
+type mldsaPrivateKey struct {
+	privKey *mldsa.PrivateKey
 }
 
 // Bytes converts this key to its byte representation,
 // if this operation is allowed.
-func (k *ed25519PrivateKey) Bytes() ([]byte, error) {
+// In the mldsa case, it isn't allowed because the Bytes function returns the seed, and not it bytes
+func (k *mldsaPrivateKey) Bytes() ([]byte, error) {
 	return nil, errors.New("Not supported.")
 }
 
 // SKI returns the subject key identifier of this key.
-func (k *ed25519PrivateKey) SKI() []byte {
+//
+// It hashes the public key, so that a private key and its public key share the same SKI: the
+// keystore relies on that to find a private key from the public key in a certificate.
+func (k *mldsaPrivateKey) SKI() []byte {
 	if k.privKey == nil {
 		return nil
 	}
 
 	// Marshall the public key
-	raw := k.privKey.Public().(ed25519.PublicKey)
+	raw := k.privKey.PublicKey().Bytes()
 
 	// Hash it
 	hash := sha256.New()
@@ -42,34 +49,33 @@ func (k *ed25519PrivateKey) SKI() []byte {
 
 // Symmetric returns true if this key is a symmetric key,
 // false if this key is asymmetric
-func (k *ed25519PrivateKey) Symmetric() bool {
+func (k *mldsaPrivateKey) Symmetric() bool {
 	return false
 }
 
 // Private returns true if this key is a private key,
 // false otherwise.
-func (k *ed25519PrivateKey) Private() bool {
+func (k *mldsaPrivateKey) Private() bool {
 	return true
 }
 
 // PublicKey returns the corresponding public key part of an asymmetric public/private key pair.
 // This method returns an error in symmetric key schemes.
-func (k *ed25519PrivateKey) PublicKey() (bccsp.Key, error) {
-	castedKey, ok := k.privKey.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, errors.New("Error casting ed25519 public key")
+func (k *mldsaPrivateKey) PublicKey() (bccsp.Key, error) {
+	if k.privKey == nil {
+		return nil, errors.New("Error casting ML-DSA public key")
 	}
-	return &ed25519PublicKey{&castedKey}, nil
+	return &mldsaPublicKey{k.privKey.PublicKey()}, nil
 }
 
-type ed25519PublicKey struct {
-	pubKey *ed25519.PublicKey
+type mldsaPublicKey struct {
+	pubKey *mldsa.PublicKey
 }
 
 // Bytes converts this key to its byte representation,
 // if this operation is allowed.
-func (k *ed25519PublicKey) Bytes() (raw []byte, err error) {
-	raw, err = x509.MarshalPKIXPublicKey(*k.pubKey)
+func (k *mldsaPublicKey) Bytes() (raw []byte, err error) {
+	raw, err = x509.MarshalPKIXPublicKey(k.pubKey)
 	if err != nil {
 		return nil, fmt.Errorf("Failed marshalling key [%s]", err)
 	}
@@ -77,12 +83,12 @@ func (k *ed25519PublicKey) Bytes() (raw []byte, err error) {
 }
 
 // SKI returns the subject key identifier of this key.
-func (k *ed25519PublicKey) SKI() []byte {
+func (k *mldsaPublicKey) SKI() []byte {
 	if k.pubKey == nil {
 		return nil
 	}
 
-	raw := *(k.pubKey)
+	raw := k.pubKey.Bytes()
 
 	// Hash it
 	hash := sha256.New()
@@ -92,18 +98,18 @@ func (k *ed25519PublicKey) SKI() []byte {
 
 // Symmetric returns true if this key is a symmetric key,
 // false if this key is asymmetric
-func (k *ed25519PublicKey) Symmetric() bool {
+func (k *mldsaPublicKey) Symmetric() bool {
 	return false
 }
 
 // Private returns true if this key is a private key,
 // false otherwise.
-func (k *ed25519PublicKey) Private() bool {
+func (k *mldsaPublicKey) Private() bool {
 	return false
 }
 
 // PublicKey returns the corresponding public key part of an asymmetric public/private key pair.
 // This method returns an error in symmetric key schemes.
-func (k *ed25519PublicKey) PublicKey() (bccsp.Key, error) {
+func (k *mldsaPublicKey) PublicKey() (bccsp.Key, error) {
 	return k, nil
 }

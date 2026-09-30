@@ -10,6 +10,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/asn1"
@@ -464,4 +465,74 @@ func TestNil(t *testing.T) {
 	require.Error(t, err)
 	_, err = publicKeyToEncryptedPEM("hello world", []byte("Hello world"))
 	require.Error(t, err)
+}
+
+func TestMLDSAKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params mldsa.Parameters
+	}{
+		{"ML-DSA-44", mldsa.MLDSA44()},
+		{"ML-DSA-65", mldsa.MLDSA65()},
+		{"ML-DSA-87", mldsa.MLDSA87()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key, err := mldsa.GenerateKey(tc.params)
+			require.NoError(t, err)
+			pub := key.PublicKey()
+
+			// Private Key DER format
+			der, err := privateKeyToDER(key)
+			require.NoError(t, err)
+			parsed, err := derToPrivateKey(der)
+			require.NoError(t, err)
+			require.IsType(t, &mldsa.PrivateKey{}, parsed)
+			require.True(t, key.Equal(parsed))
+
+			rawPEM, err := privateKeyToPEM(key, nil)
+			require.NoError(t, err)
+			pemBlock, _ := pem.Decode(rawPEM)
+			// The standard PKCS#8 block type, not a made-up per-level one.
+			require.Equal(t, "PRIVATE KEY", pemBlock.Type)
+			_, err = x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
+			require.NoError(t, err)
+			_, err = pemToPrivateKey(rawPEM, nil)
+			require.NoError(t, err)
+
+			_, err = privateKeyToPEM((*mldsa.PrivateKey)(nil), nil)
+			require.Error(t, err, "privateKeyToPEM should fail on nil")
+
+			encPEM, err := privateKeyToPEM(key, []byte("passwd"))
+			require.NoError(t, err)
+			_, err = pemToPrivateKey(encPEM, nil)
+			require.Error(t, err)
+			_, err = pemToPrivateKey(encPEM, []byte("passwd"))
+			require.NoError(t, err)
+
+			// Public Key PEM format
+			rawPEM, err = publicKeyToPEM(pub, nil)
+			require.NoError(t, err)
+			pemBlock, _ = pem.Decode(rawPEM)
+			require.Equal(t, "PUBLIC KEY", pemBlock.Type)
+			parsedPub, err := pemToPublicKey(rawPEM, nil)
+			require.NoError(t, err)
+			require.True(t, pub.Equal(parsedPub))
+
+			// Public Key Encrypted PEM format
+			encPEM, err = publicKeyToPEM(pub, []byte("passwd"))
+			require.NoError(t, err)
+			_, err = pemToPublicKey(encPEM, nil)
+			require.Error(t, err)
+			_, err = pemToPublicKey(encPEM, []byte("passwd"))
+			require.NoError(t, err)
+			_, err = pemToPublicKey(encPEM, []byte("passw"))
+			require.Error(t, err, "pemToPublicKey should fail on wrong password")
+
+			// Public Key DER format
+			der, err = x509.MarshalPKIXPublicKey(pub)
+			require.NoError(t, err)
+			_, err = derToPublicKey(der)
+			require.NoError(t, err)
+		})
+	}
 }

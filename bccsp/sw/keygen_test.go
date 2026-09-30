@@ -8,6 +8,7 @@ package sw
 
 import (
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"errors"
 	"reflect"
 	"testing"
@@ -96,4 +97,31 @@ func TestAESKeyGeneratorInvalidInputs(t *testing.T) {
 	_, err := kg.KeyGen(nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Len must be larger than 0")
+}
+
+func TestMLDSAKeyGenerator(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		params mldsa.Parameters
+	}{
+		{"ML-DSA-44", mldsa.MLDSA44()},
+		{"ML-DSA-65", mldsa.MLDSA65()},
+		{"ML-DSA-87", mldsa.MLDSA87()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			kg := &mldsaKeyGenerator{params: tc.params}
+
+			k, err := kg.KeyGen(nil)
+			require.NoError(t, err)
+
+			mldsaK, ok := k.(*mldsaPrivateKey)
+			require.True(t, ok)
+			require.NotNil(t, mldsaK.privKey)
+			require.Equal(t, tc.params, mldsaK.privKey.PublicKey().Parameters())
+		})
+	}
 }
