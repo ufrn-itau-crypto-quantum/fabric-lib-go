@@ -118,6 +118,55 @@ func rewriteTestTBS(t *testing.T, tbs, sigAlg, spki []byte) []byte {
 	return out
 }
 
+// issueTestCRL gera com o CreateCRL do crypto/x509 uma CRL assinada por uma chave descartável em
+// nome de issuer, e troca o algoritmo e a assinatura pelos de signer.
+func issueTestCRL(t *testing.T, issuer *x509.Certificate, signer *PrivateKey, revoked ...*big.Int) *pkix.CertificateList {
+	t.Helper()
+	var list []pkix.RevokedCertificate
+	for _, serial := range revoked {
+		list = append(list, pkix.RevokedCertificate{SerialNumber: serial, RevocationTime: time.Now()})
+	}
+	//nolint:staticcheck
+	der, err := issuer.CreateCRL(rand.Reader, testECDSAKey(t), list, time.Now(), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	var outer certificateOuter
+	_, err = asn1.Unmarshal(der, &outer)
+	require.NoError(t, err)
+
+	var seq asn1.RawValue
+	_, err = asn1.Unmarshal(outer.TBS.FullBytes, &seq)
+	require.NoError(t, err)
+	var fields [][]byte
+	for rest := seq.Bytes; len(rest) > 0; {
+		var field asn1.RawValue
+		rest, err = asn1.Unmarshal(rest, &field)
+		require.NoError(t, err)
+		fields = append(fields, field.FullBytes)
+	}
+	// version, signature, issuer, thisUpdate, nextUpdate, revokedCertificates, crlExtensions
+	algID, err := AlgorithmIdentifier(signer.PublicKey().Algorithm)
+	require.NoError(t, err)
+	fields[1] = algID
+	var content []byte
+	for _, field := range fields {
+		content = append(content, field...)
+	}
+	tbs, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: content})
+	require.NoError(t, err)
+	signature, err := signer.Sign(rand.Reader, tbs, nil)
+	require.NoError(t, err)
+	der, err = asn1.Marshal(certificateOuter{
+		TBS:                asn1.RawValue{FullBytes: tbs},
+		SignatureAlgorithm: asn1.RawValue{FullBytes: algID},
+		Signature:          asn1.BitString{Bytes: signature, BitLength: 8 * len(signature)},
+	})
+	require.NoError(t, err)
+	//nolint:staticcheck
+	crl, err := x509.ParseCRL(der)
+	require.NoError(t, err)
+	return crl
+}
+
 func caTemplate(name string) *x509.Certificate {
 	return &x509.Certificate{
 		Subject: pkix.Name{CommonName: name}, IsCA: true, BasicConstraintsValid: true, MaxPathLen: -1,
@@ -218,6 +267,45 @@ func TestCompositeVerifyChain(t *testing.T) {
 	intermediates.AddCert(p.ecInter)
 	_, err = p.leaf.Verify(x509.VerifyOptions{Roots: roots, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}})
 	require.Error(t, err)
+}
+
+func TestCompositeCRLSignature(t *testing.T) {
+	p := newTestPKI(t)
+	crl := issueTestCRL(t, p.inter, p.interKey, p.leaf.SerialNumber)
+	require.True(t, IsCRLSignedWithComposite(crl))
+	require.NoError(t, CheckCRLSignature(crl, p.interKey.PublicKey()))
+	require.Equal(t, p.leaf.SerialNumber, crl.TBSCertList.RevokedCertificates[0].SerialNumber)
+
+	require.Error(t, p.inter.CheckCRLSignature(crl))
+
+	other := testCompositeKey(t, 44)
+	require.Error(t, CheckCRLSignature(crl, other.PublicKey()))
+
+	require.ErrorContains(t, CheckCRLSignature(crl, p.rootKey.PublicKey()), "not the one of the issuer key")
+
+	tampered := *crl
+	tampered.TBSCertList.Raw = flipByte(crl.TBSCertList.Raw, len(crl.TBSCertList.Raw)-1)
+	require.Error(t, CheckCRLSignature(&tampered, p.interKey.PublicKey()))
+
+	withNull := *crl
+	withNull.SignatureAlgorithm.Parameters = asn1.NullRawValue
+	require.ErrorContains(t, CheckCRLSignature(&withNull, p.interKey.PublicKey()), "not the one of the issuer key")
+	innerNull := *crl
+	innerNull.TBSCertList.Signature.Parameters = asn1.NullRawValue
+	require.ErrorContains(t, CheckCRLSignature(&innerNull, p.interKey.PublicKey()), "not the one of the issuer key")
+
+	shortBits := *crl
+	shortBits.SignatureValue.BitLength--
+	require.ErrorContains(t, CheckCRLSignature(&shortBits, p.interKey.PublicKey()), "whole number of bytes")
+
+	//nolint:staticcheck
+	der, err := p.ecInter.CreateCRL(rand.Reader, p.ecKey, nil, time.Now(), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	//nolint:staticcheck
+	classic, err := x509.ParseCRL(der)
+	require.NoError(t, err)
+	require.False(t, IsCRLSignedWithComposite(classic))
+	require.False(t, IsCRLSignedWithComposite(nil))
 }
 
 func TestCompositeVerifyChainKeyUsage(t *testing.T) {
