@@ -7,11 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 package composite
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/mldsa"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -499,6 +501,106 @@ func TestCompositePKIXRejectsOtherKeys(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ParsePKCS8PrivateKey(version1)
 	require.Error(t, err)
+}
+
+func TestCompositeCertificateSignatureAgainstVectors(t *testing.T) {
+	vectors := loadCompositeVectors(t)
+	for _, fx := range compositeFixtures {
+		t.Run(fx.tcID, func(t *testing.T) {
+			alg := fixtureAlgorithm(t, fx)
+			cert, err := x509.ParseCertificate(decodeB64(t, vectors.find(t, fx.tcID).X5c))
+			require.NoError(t, err)
+			pub, err := ParsePKIXPublicKey(cert.RawSubjectPublicKeyInfo)
+			require.NoError(t, err)
+			require.NoError(t, CheckCertificateSignature(cert, pub))
+
+			algID, err := AlgorithmIdentifier(alg)
+			require.NoError(t, err)
+			var outer certificateOuter
+			_, err = asn1.Unmarshal(cert.Raw, &outer)
+			require.NoError(t, err)
+			require.Equal(t, outer.SignatureAlgorithm.FullBytes, algID)
+			var spki struct {
+				Algorithm asn1.RawValue
+				PublicKey asn1.BitString
+			}
+			_, err = asn1.Unmarshal(cert.RawSubjectPublicKeyInfo, &spki)
+			require.NoError(t, err)
+			require.Equal(t, spki.Algorithm.FullBytes, algID)
+		})
+	}
+}
+
+func TestCompositeCertificateSignatureRejects(t *testing.T) {
+	vectors := loadCompositeVectors(t)
+	cert, err := x509.ParseCertificate(decodeB64(t, vectors.find(t, compositeFixtures[1].tcID).X5c))
+	require.NoError(t, err)
+	pub, err := ParsePKIXPublicKey(cert.RawSubjectPublicKeyInfo)
+	require.NoError(t, err)
+	var outer certificateOuter
+	_, err = asn1.Unmarshal(cert.Raw, &outer)
+	require.NoError(t, err)
+
+	rebuild := func(o certificateOuter) *x509.Certificate {
+		der, err := asn1.Marshal(o)
+		require.NoError(t, err)
+		return &x509.Certificate{Raw: der}
+	}
+
+	tampered := outer
+	tbs := append([]byte{}, outer.TBS.FullBytes...)
+	tbs[len(tbs)-1] ^= 0x01
+	tampered.TBS = asn1.RawValue{FullBytes: tbs}
+	require.Error(t, CheckCertificateSignature(rebuild(tampered), pub))
+
+	withNull, err := asn1.Marshal(pkix.AlgorithmIdentifier{Algorithm: OIDMLDSA65ECDSAP384SHA512, Parameters: asn1.NullRawValue})
+	require.NoError(t, err)
+	nullParams := outer
+	nullParams.SignatureAlgorithm = asn1.RawValue{FullBytes: withNull}
+	require.Error(t, CheckCertificateSignature(rebuild(nullParams), pub))
+
+	otherID, err := AlgorithmIdentifier(fixtureAlgorithm(t, compositeFixtures[2]))
+	require.NoError(t, err)
+	otherAlg := outer
+	otherAlg.SignatureAlgorithm = asn1.RawValue{FullBytes: otherID}
+	require.Error(t, CheckCertificateSignature(rebuild(otherAlg), pub))
+
+	otherPub, err := ParsePKIXPublicKey(mustParseCert(t, vectors.find(t, compositeFixtures[0].tcID).X5c).RawSubjectPublicKeyInfo)
+	require.NoError(t, err)
+	require.ErrorContains(t, CheckCertificateSignature(cert, otherPub), "but the issuer key is")
+
+	priv, err := ParsePrivateKey(fixtureAlgorithm(t, compositeFixtures[1]), decodeB64(t, vectors.find(t, compositeFixtures[1].tcID).SK))
+	require.NoError(t, err)
+	algID65, err := AlgorithmIdentifier(fixtureAlgorithm(t, compositeFixtures[1]))
+	require.NoError(t, err)
+	algID87, err := AlgorithmIdentifier(fixtureAlgorithm(t, compositeFixtures[2]))
+	require.NoError(t, err)
+	i := bytes.Index(outer.TBS.FullBytes, algID65)
+	require.Positive(t, i)
+	innerChanged := append(append(append([]byte{}, outer.TBS.FullBytes[:i]...), algID87...), outer.TBS.FullBytes[i+len(algID87):]...)
+	sig, err := priv.Sign(rand.Reader, innerChanged, nil)
+	require.NoError(t, err)
+	require.NoError(t, Verify(pub, innerChanged, sig, nil))
+	mismatch := outer
+	mismatch.TBS = asn1.RawValue{FullBytes: innerChanged}
+	mismatch.Signature = asn1.BitString{Bytes: sig, BitLength: len(sig) * 8}
+	require.ErrorContains(t, CheckCertificateSignature(rebuild(mismatch), pub), "differs from the one in the tbsCertificate")
+}
+
+func TestCompositeSubjectKeyID(t *testing.T) {
+	vectors := loadCompositeVectors(t)
+	pub := vectorPublicKey(t, vectors, compositeFixtures[0])
+	id, err := SubjectKeyID(pub)
+	require.NoError(t, err)
+	sum := sha1.Sum(decodeB64(t, vectors.find(t, compositeFixtures[0].tcID).PK))
+	require.Equal(t, sum[:], id)
+}
+
+func mustParseCert(t *testing.T, b64 string) *x509.Certificate {
+	t.Helper()
+	cert, err := x509.ParseCertificate(decodeB64(t, b64))
+	require.NoError(t, err)
+	return cert
 }
 
 func vectorPublicKey(t *testing.T, vectors compositeVectorFile, fx compositeFixture) *PublicKey {
