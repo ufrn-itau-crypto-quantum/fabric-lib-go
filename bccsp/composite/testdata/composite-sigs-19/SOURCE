@@ -1,0 +1,7 @@
+file:        testvectors.json
+url:         https://raw.githubusercontent.com/lamps-wg/draft-composite-sigs/f0627ab34acfe1aee0abce4bee91ed2b577eab76/src/testvectors.json
+upstream:    lamps-wg/draft-composite-sigs commit f0627ab34acfe1aee0abce4bee91ed2b577eab76 (2026-01-07)
+spec:        draft-ietf-lamps-pq-composite-sigs-19 (published 2026-04-21), Appendix E
+sha256:      a60f697f9fd94c3cd5e4501a40c4396d9a9ffc7cf0f8a1ddd87dedbb46a7abf0
+downloaded:  2026-09-16
+validated:   all 21 tcIds, fields pk x5c sk sk_pkcs8 s sWithContext, equal to Appendix E of the draft 19 PDF
