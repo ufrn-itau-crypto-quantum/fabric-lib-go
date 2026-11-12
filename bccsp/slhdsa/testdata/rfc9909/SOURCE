@@ -1,0 +1,7 @@
+files:       public-key.pem private-key.pem certificate.pem
+spec:        RFC 9909 (Internet X.509 PKI -- Algorithm Identifiers for SLH-DSA), Appendix C.1, C.2 and C.3
+source:      ai-docs/bibliografia, text of RFC 9909, with the 3-space RFC indentation removed
+extracted:   2026-10-28
+sha256:      7895e78f8204f5ac76cb22637cec73b39cd0961d53b70a97cd19ca9c129a0ee5  certificate.pem
+sha256:      a148357565674e51cf1f43567b51bb0046728712efdfd799e94e8bd63a0d2eaa  private-key.pem
+sha256:      545d4a4d71cc17a684a354713262032ce5f555593aab8974941c1c38ada836cf  public-key.pem
