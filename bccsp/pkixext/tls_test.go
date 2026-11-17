@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestVerifyTLSPeer(t *testing.T) {
 			return serverOpts("client.org1")
 		}, "key usage"},
 		"hostname mismatch": {[][]byte{leaf.Raw}, func() pkixext.TLSVerifyOptions { return serverOpts("peer1.org1") }, "peer1.org1"},
-		"malformed": {[][]byte{[]byte("junk")}, func() pkixext.TLSVerifyOptions { return serverOpts("peer0.org1") }, "parse"},
+		"malformed":         {[][]byte{[]byte("junk")}, func() pkixext.TLSVerifyOptions { return serverOpts("peer0.org1") }, "parse"},
 	}
 	for name, tc := range rejected {
 		t.Run(name, func(t *testing.T) {
@@ -267,4 +268,51 @@ func TestConfigureVerificationHandshake(t *testing.T) {
 		require.Equal(t, tls.RequestClientCert, cfg.ClientAuth)
 		require.Nil(t, cfg.VerifyPeerCertificate)
 	})
+}
+
+func TestX509KeyPairExternalKey(t *testing.T) {
+	pki := newTLSPKI(t, "org1")
+	key := slhdsaKey(t, slhdsa.SHA2_128f)
+	tpl := leafTemplate("peer0.org1")
+	leaf := issueCert(t, tpl, pki.inter, key.Public(), pki.interKey)
+	keyDER, err := slhdsa.MarshalPKCS8PrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	chainPEM := append(pemCert(leaf), pemCert(pki.inter)...)
+
+	_, err = tls.X509KeyPair(chainPEM, keyPEM)
+	require.Error(t, err, "crypto/tls does not load an SLH-DSA key")
+	pair, err := pkixext.X509KeyPair(chainPEM, keyPEM)
+	require.NoError(t, err)
+	require.Len(t, pair.Certificate, 2)
+	require.True(t, pair.Leaf.Equal(leaf))
+	require.IsType(t, &slhdsa.PrivateKey{}, pair.PrivateKey)
+
+	otherDER, err := slhdsa.MarshalPKCS8PrivateKey(slhdsaKey(t, slhdsa.SHA2_128f))
+	require.NoError(t, err)
+	_, err = pkixext.X509KeyPair(chainPEM, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: otherDER}))
+	require.ErrorContains(t, err, "does not match")
+
+	_, mlPair := pki.issueLeaf(t, "peer1.org1")
+	mlKeyDER, err := x509.MarshalPKCS8PrivateKey(mlPair.PrivateKey)
+	require.NoError(t, err)
+	got, err := pkixext.X509KeyPair(pemCert(mlPair.Leaf), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mlKeyDER}))
+	require.NoError(t, err, "keys crypto/x509 parses keep going through tls.X509KeyPair")
+	require.IsType(t, &mldsa.PrivateKey{}, got.PrivateKey)
+}
+
+func TestTLSSchemesRecord(t *testing.T) {
+	pkixext.RecordTLSScheme(pkixext.TLSScheme{Name: "test-b", Codepoint: 0xfe02})
+	pkixext.RecordTLSScheme(pkixext.TLSScheme{Name: "test-a", Codepoint: 0xfe01})
+	pkixext.RecordTLSScheme(pkixext.TLSScheme{Name: "test-b2", Codepoint: 0xfe02})
+	var got []pkixext.TLSScheme
+	for _, s := range pkixext.TLSSchemes() {
+		if strings.HasPrefix(s.Name, "test-") {
+			got = append(got, s)
+		}
+	}
+	require.Equal(t, []pkixext.TLSScheme{{"test-a", 0xfe01}, {"test-b2", 0xfe02}}, got)
+	require.Equal(t, "test-a(0xfe01)", got[0].String())
+	require.Contains(t, pkixext.TLSSchemesLog(), pkixext.TLSSchemesLogPrefix+" ")
+	require.Contains(t, pkixext.TLSSchemesLog(), "test-a(0xfe01), test-b2(0xfe02)")
 }
